@@ -19,7 +19,7 @@ A flexible Python tool for verifying Rust test execution patterns and rules agai
 No installation required. Just ensure you have Python 3.6+ installed.
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Asif1405/swebench-log-analyzer-rust
 cd turing-logs
 ```
 
