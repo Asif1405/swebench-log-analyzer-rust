@@ -58,7 +58,7 @@ python3 main.py --fail-on-reject test_data.json
 
 The tool accepts JSON files containing test lists in two formats:
 
-### New Format (Recommended)
+### JSON Format (Should contain)
 ```json
 {
   "pass_to_pass": [
@@ -66,20 +66,6 @@ The tool accepts JSON files containing test lists in two formats:
     "test_module::test_function_2"
   ],
   "fail_to_pass": [
-    "test_module::test_function_3",
-    "test_module::test_function_4"
-  ]
-}
-```
-
-### Legacy Format
-```json
-{
-  "p2p": [
-    "test_module::test_function_1",
-    "test_module::test_function_2"
-  ],
-  "f2p": [
     "test_module::test_function_3",
     "test_module::test_function_4"
   ]
@@ -229,11 +215,3 @@ The tool handles complex Rust test output patterns:
 ### Dependencies
 - Python 3.6+
 - Standard library only (no external dependencies)
-
-## License
-
-[Add your license information here]
-
-## Contributing
-
-[Add contribution guidelines here]
