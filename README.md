@@ -268,7 +268,7 @@ The tool handles complex Rust test output patterns:
 ### Project Structure
 ```
 ├── main.py                    # Main verification script
-├── rust-phf__rust-phf-342.json  # Example test data
+├── rust-phf__rust-phf-342.json  # Main json
 ├── logs/                      # Log files directory
 │   ├── base.log
 │   ├── before.log
