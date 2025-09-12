@@ -20,7 +20,7 @@ No installation required. Just ensure you have Python 3.6+ installed.
 
 ```bash
 git clone https://github.com/Asif1405/swebench-log-analyzer-rust
-cd turing-logs
+cd swebench-log-analyzer-rust
 ```
 
 ## Usage
