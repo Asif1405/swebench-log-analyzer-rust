@@ -21,6 +21,18 @@ _TEST_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Enhanced patterns for improved duplicate detection
+_FILE_BOUNDARY_PATTERNS = [
+    re.compile(r'Running\s+([^/\s]+(?:/[^/\s]+)*\.rs)\s*\('),
+    re.compile(r'===\s*Running\s+(.+\.rs)'),
+    re.compile(r'test\s+result:\s+ok\.\s+\d+\s+passed.*for\s+(.+\.rs)'),
+]
+
+_ENHANCED_TEST_PATTERNS = [
+    re.compile(r'\btest\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(ok|FAILED|ignored)', re.IGNORECASE),
+    re.compile(r'test\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s+\.\.\.\s+(ok|FAILED|ignored)', re.IGNORECASE),
+]
+
 def parse_rust_tests_text(text: str) -> Dict[str, object]:
     passed, failed, ignored = set(), set(), set()
     freq = defaultdict(int)
@@ -305,49 +317,106 @@ def status_lookup(names: Iterable[str], parsed: Dict[str, Set[str]]) -> Dict[str
             out[n] = "missing"
     return out
 
+def detect_file_boundary(line: str) -> Optional[str]:
+    """Detect file boundary using multiple enhanced patterns"""
+    for pattern in _FILE_BOUNDARY_PATTERNS:
+        match = pattern.search(line)
+        if match:
+            return match.group(1)
+    return None
+
+def extract_test_info_enhanced(line: str) -> Optional[Tuple[str, str]]:
+    """Extract test name and status using enhanced patterns"""
+    for pattern in _ENHANCED_TEST_PATTERNS:
+        match = pattern.search(line)
+        if match:
+            return match.group(1).strip(), match.group(2).strip()
+    return None
+
+def is_true_duplicate(occurrences: List[Dict]) -> bool:
+    """Determine if multiple occurrences represent problematic duplicates"""
+    if len(occurrences) <= 1:
+        return False
+    
+    # Check line distance - if tests are very close together, likely duplicates
+    line_numbers = [occ['line_no'] for occ in occurrences]
+    line_numbers.sort()
+    min_distance = min(line_numbers[i] - line_numbers[i-1] for i in range(1, len(line_numbers)))
+    
+    # If tests appear within 10 lines of each other, likely true duplicates
+    if min_distance < 10:
+        return True
+    
+    # Check for mixed success/failure status that might indicate retries
+    statuses = [occ['status'].lower() for occ in occurrences]
+    if 'failed' in statuses and 'ok' in statuses:
+        return True
+    
+    # If all occurrences have identical context, likely problematic
+    contexts = [' '.join(occ.get('context_before', []) + occ.get('context_after', [])) for occ in occurrences]
+    if len(set(contexts)) == 1 and contexts[0].strip():
+        return True
+    
+    return False
+
 def detect_same_file_duplicates(raw_content: str) -> List[str]:
     """
-    Detect tests that appear multiple times within the same test file.
-    This is the only type of duplication that should be flagged as problematic.
+    Enhanced detection of tests that appear multiple times within the same test file.
+    Uses improved pattern matching and context analysis to distinguish true duplicates
+    from legitimate same-named tests in different contexts.
     
-    Returns list of test names that appear multiple times in the same file context.
+    Returns list of problematic duplicate descriptions.
     """
     if not raw_content:
         return []
     
-    import re
-    from collections import defaultdict
-    
     lines = raw_content.split('\n')
+    current_file = "unknown" 
+    test_occurrences = defaultdict(list)  # Store detailed occurrence info
     
-    # Track which test file section we're in based on "Running" messages
-    current_file = "unknown"
-    test_occurrences = defaultdict(lambda: defaultdict(int))  # {file: {test_name: count}}
-    
-    for line in lines:
-        # Look for "Running" messages that indicate which test file is being executed
-        running_match = re.search(r'Running\s+([^/\s]+(?:/[^/\s]+)*\.rs)\s*\(', line)
-        if running_match:
-            current_file = running_match.group(1)
+    for line_no, line in enumerate(lines):
+        # Check for file boundary using enhanced patterns
+        file_boundary = detect_file_boundary(line)
+        if file_boundary:
+            current_file = file_boundary
             continue
-            
-        # Also look for test result summaries that might indicate file boundaries
+        
+        # Check for test result summaries that indicate file boundaries
         if re.search(r'test result:\s*ok\.\s*\d+\s*passed', line):
-            # This marks the end of a test file section
             continue
             
-        # Look for test execution lines
-        test_match = re.search(r'\btest\s+([\w:]+(?:::\w+)*)\s+\.\.\.\s+(ok|FAILED|ignored)', line, re.IGNORECASE)
-        if test_match:
-            test_name = test_match.group(1).strip()
-            test_occurrences[current_file][test_name] += 1
+        # Extract test information using enhanced patterns
+        test_info = extract_test_info_enhanced(line)
+        if test_info:
+            test_name, status = test_info
+            test_occurrences[current_file].append({
+                'test_name': test_name,
+                'status': status,
+                'line_no': line_no,
+                'line_content': line.strip(),
+                'context_before': lines[max(0, line_no-2):line_no] if line_no >= 2 else [],
+                'context_after': lines[line_no+1:min(len(lines), line_no+3)] if line_no < len(lines)-2 else []
+            })
     
-    # Find tests that appear multiple times within the same file
+    # Analyze for true duplicates using context
     true_duplicates = []
-    for file_name, tests in test_occurrences.items():
-        for test_name, count in tests.items():
-            if count > 1:
-                true_duplicates.append(f"{test_name} (appears {count} times in {file_name})")
+    for file_name, occurrences in test_occurrences.items():
+        # Group by test name
+        by_test_name = defaultdict(list)
+        for occurrence in occurrences:
+            by_test_name[occurrence['test_name']].append(occurrence)
+        
+        # Check for duplicates within each test name group
+        for test_name, test_occurrences_list in by_test_name.items():
+            if len(test_occurrences_list) > 1:
+                # Use enhanced logic to determine if it's a true duplicate
+                if is_true_duplicate(test_occurrences_list):
+                    line_info = [f"line {occ['line_no']}" for occ in test_occurrences_list]
+                    duplicate_info = (
+                        f"{test_name} (appears {len(test_occurrences_list)} times in {file_name}: "
+                        f"{', '.join(line_info)})"
+                    )
+                    true_duplicates.append(duplicate_info)
     
     return true_duplicates
 
