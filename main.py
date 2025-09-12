@@ -389,8 +389,8 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     # Rule C5 fails only if there are true same-file duplicates
     c5 = len(dup_map) > 0
 
-    # P2P Rejection logic
-    rr_considered = [t for t in p2p if base_s.get(t) != "passed"]
+    # P2P Rejection logic - P2P tests should pass in both base and after
+    rr_considered = [t for t in p2p if not (base_s.get(t) == "passed" and after_s.get(t) == "passed")]
     rr_rejected   = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     rr_ok         = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) == "passed"]
     rejection_satisfied = len(rr_rejected) > 0
@@ -443,7 +443,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
         },
         "rejection_reason": {
             "satisfied": rejection_satisfied,
-            "p2p_ignored_because_passed_in_base": [t for t in p2p if base_s.get(t) == "passed"][:20],
+            "p2p_ignored_because_passed_in_base_and_after": [t for t in p2p if base_s.get(t) == "passed" and after_s.get(t) == "passed"][:20],
             "p2p_considered": rr_considered[:50],
             "p2p_rejected": rr_rejected,
             "p2p_considered_but_ok": rr_ok,
