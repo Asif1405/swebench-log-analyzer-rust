@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main.py - Flexible version that takes log folder and combined JSON as input
+verify_rules_flexible.py - Flexible version that takes log folder and combined JSON as input
 Supports both new naming format (fail_to_pass/pass_to_pass) and legacy format (p2p/f2p).
 Implements dynamic log file discovery for patterns like *_base.log, *_before.log, *_after.log.
 """
@@ -10,15 +10,14 @@ import json, re, ast, sys, glob
 from typing import Dict, Set, List, Iterable, Optional, Tuple
 from collections import defaultdict
 
-# Matches test patterns anywhere in the line (handles concatenated output):
+# Matches test patterns anywhere in the line (using word boundary):
 #   test yank::explicit_version ... ok
 #   test workspaces::virtual_primary_package_env_var ... ok  
 #   test bad_config::bad_test_name ... FAILED
 #   test src/... (doc-tests) ... ignored
 #   prefix text...test map::test_unicase_ascii ... ok (handles concatenated/embedded output)
-#   Test skipped; requires root usertest test_dd::test_seek_past_dev ... ok
 _TEST_LINE_RE = re.compile(
-    r'(?:^|\s|\W)test\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)',
+    r'\btest\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)',
     re.IGNORECASE,
 )
 
@@ -30,36 +29,23 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
     
     # First pass: handle normal test lines and concatenated results
     for line_num, line in enumerate(lines):
-        # Try to find all possible test matches in the line
-        matches = list(_TEST_LINE_RE.finditer(line))
-        
-        if not matches:
+        m = _TEST_LINE_RE.search(line)  # Use search instead of match to find test anywhere in line
+        if not m:
             continue
-            
-        # For each match, try to extract the best test name
-        for m in matches:
-            name, status = m.groups()
-            status = status.lower()
-            
-            # Clean up the test name - if it contains suspicious patterns, try to extract the real test name
-            if any(word in name.lower() for word in ['skipped', 'requires', 'root', 'user']) and 'test_' in name:
-                # Try to extract just the test_* part
-                test_match = re.search(r'(test_[\w:]+(?:::[\w:]+)*)', name)
-                if test_match:
-                    name = test_match.group(1)
-            
-            freq[name] += 1
-            test_contexts[name].append({
-                'line_num': line_num,
-                'full_line': line.strip(),
-                'status': status
-            })
-            if status == "ok":
-                passed.add(name)
-            elif status == "failed":
-                failed.add(name)
-            elif status == "ignored":
-                ignored.add(name)
+        name, status = m.groups()
+        status = status.lower()
+        freq[name] += 1
+        test_contexts[name].append({
+            'line_num': line_num,
+            'full_line': line.strip(),
+            'status': status
+        })
+        if status == "ok":
+            passed.add(name)
+        elif status == "failed":
+            failed.add(name)
+        elif status == "ignored":
+            ignored.add(name)
     
     # Second pass: handle cases where test result is on a separate line or buried in output
     # Look for test lines that start but don't have an immediate result
@@ -389,18 +375,18 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c4_hits = [t for t in p2p if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     c4 = len(c4_hits) > 0
 
-    # 5) True duplicates in the same log for F2P/P2P only
-    # Only flag tests that appear multiple times within the same test file AND are in P2P or F2P
-    p2p_f2p_set = set(p2p) | set(f2p)
+    # 5) True duplicates in the same log for F2P/P2P
+    # Only flag tests that appear multiple times within the same test file
     dup_map = {}
     for label, log in (("base", base_log), ("before", before_log), ("after", after_log)):
         # Detect true duplicates (same test appearing multiple times in same file)
-        all_duplicates = detect_same_file_duplicates(log.get("raw_content", ""))
-        # Filter to only those in P2P or F2P
-        filtered_duplicates = [d for d in all_duplicates if any(name.split()[0] in p2p_f2p_set for name in [d.split()[0]])]
-        if filtered_duplicates:
-            dup_map[label] = filtered_duplicates[:50]
-    # Rule C5 fails only if there are true same-file duplicates in P2P/F2P
+        true_duplicates = detect_same_file_duplicates(log.get("raw_content", ""))
+        
+        # Only report if there are actual same-file duplicates
+        if true_duplicates:
+            dup_map[label] = true_duplicates[:50]
+    
+    # Rule C5 fails only if there are true same-file duplicates
     c5 = len(dup_map) > 0
 
     # P2P Rejection logic
@@ -408,11 +394,6 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     rr_rejected   = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     rr_ok         = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) == "passed"]
     rejection_satisfied = len(rr_rejected) > 0
-
-    # F2P Rejection logic (similar to P2P)
-    f2p_rr_considered = [t for t in f2p if base_s.get(t) == "passed"]  # F2P that passed in base (problematic)
-    f2p_rr_rejected = [t for t in f2p if before_s.get(t) == "passed" and after_s.get(t) != "passed"]  # F2P that regressed
-    f2p_rr_ok = [t for t in f2p if base_s.get(t) != "passed" and before_s.get(t) == "failed" and after_s.get(t) == "passed"]  # F2P that behaved correctly
 
     # F2P Analysis
     f2p_failed_in_base = [t for t in f2p if base_s.get(t) == "failed"]
@@ -466,10 +447,10 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
             "p2p_considered": rr_considered[:50],
             "p2p_rejected": rr_rejected,
             "p2p_considered_but_ok": rr_ok,
-            "f2p_ignored_because_passed_in_base": f2p_rr_considered[:20],
-            "f2p_considered": [t for t in f2p if base_s.get(t) != "passed"][:50],
-            "f2p_rejected": f2p_rr_rejected,
-            "f2p_considered_but_ok": f2p_rr_ok,
+            "f2p_ignored_because_passed_in_after": [t for t in f2p if after_s.get(t) == "passed"][:20],
+            "f2p_considered": [t for t in f2p if after_s.get(t) != "passed"][:50],
+            "f2p_rejected": [t for t in f2p if after_s.get(t) == "failed"][:50],
+            "f2p_considered_but_ok": [t for t in f2p if after_s.get(t) == "missing"][:50],
         },
         "f2p_analysis": {
             "base_status": {
