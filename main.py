@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-verify_rules_flexible.py - Flexible version that takes log folder and combined JSON as input
+main.py - Flexible version that takes log folder and combined JSON as input
 Supports both new naming format (fail_to_pass/pass_to_pass) and legacy format (p2p/f2p).
 Implements dynamic log file discovery for patterns like *_base.log, *_before.log, *_after.log.
 """
@@ -10,14 +10,15 @@ import json, re, ast, sys, glob
 from typing import Dict, Set, List, Iterable, Optional, Tuple
 from collections import defaultdict
 
-# Matches test patterns anywhere in the line (using word boundary):
+# Matches test patterns anywhere in the line (handles concatenated output):
 #   test yank::explicit_version ... ok
 #   test workspaces::virtual_primary_package_env_var ... ok  
 #   test bad_config::bad_test_name ... FAILED
 #   test src/... (doc-tests) ... ignored
 #   prefix text...test map::test_unicase_ascii ... ok (handles concatenated/embedded output)
+#   Test skipped; requires root usertest test_dd::test_seek_past_dev ... ok
 _TEST_LINE_RE = re.compile(
-    r'\btest\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)',
+    r'(?:^|\s|\W)test\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)',
     re.IGNORECASE,
 )
 
@@ -29,23 +30,36 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
     
     # First pass: handle normal test lines and concatenated results
     for line_num, line in enumerate(lines):
-        m = _TEST_LINE_RE.search(line)  # Use search instead of match to find test anywhere in line
-        if not m:
+        # Try to find all possible test matches in the line
+        matches = list(_TEST_LINE_RE.finditer(line))
+        
+        if not matches:
             continue
-        name, status = m.groups()
-        status = status.lower()
-        freq[name] += 1
-        test_contexts[name].append({
-            'line_num': line_num,
-            'full_line': line.strip(),
-            'status': status
-        })
-        if status == "ok":
-            passed.add(name)
-        elif status == "failed":
-            failed.add(name)
-        elif status == "ignored":
-            ignored.add(name)
+            
+        # For each match, try to extract the best test name
+        for m in matches:
+            name, status = m.groups()
+            status = status.lower()
+            
+            # Clean up the test name - if it contains suspicious patterns, try to extract the real test name
+            if any(word in name.lower() for word in ['skipped', 'requires', 'root', 'user']) and 'test_' in name:
+                # Try to extract just the test_* part
+                test_match = re.search(r'(test_[\w:]+(?:::[\w:]+)*)', name)
+                if test_match:
+                    name = test_match.group(1)
+            
+            freq[name] += 1
+            test_contexts[name].append({
+                'line_num': line_num,
+                'full_line': line.strip(),
+                'status': status
+            })
+            if status == "ok":
+                passed.add(name)
+            elif status == "failed":
+                failed.add(name)
+            elif status == "ignored":
+                ignored.add(name)
     
     # Second pass: handle cases where test result is on a separate line or buried in output
     # Look for test lines that start but don't have an immediate result
