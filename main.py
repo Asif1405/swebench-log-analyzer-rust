@@ -389,11 +389,24 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     # Rule C5 fails only if there are true same-file duplicates
     c5 = len(dup_map) > 0
 
-    # Rejection logic
+    # P2P Rejection logic
     rr_considered = [t for t in p2p if base_s.get(t) != "passed"]
     rr_rejected   = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     rr_ok         = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) == "passed"]
     rejection_satisfied = len(rr_rejected) > 0
+
+    # F2P Analysis
+    f2p_failed_in_base = [t for t in f2p if base_s.get(t) == "failed"]
+    f2p_missing_in_base = [t for t in f2p if base_s.get(t) == "missing"]
+    f2p_passed_in_base = [t for t in f2p if base_s.get(t) == "passed"]
+    
+    f2p_passed_in_before = [t for t in f2p if before_s.get(t) == "passed"]
+    f2p_failed_in_before = [t for t in f2p if before_s.get(t) == "failed"]
+    f2p_missing_in_before = [t for t in f2p if before_s.get(t) == "missing"]
+    
+    f2p_passed_in_after = [t for t in f2p if after_s.get(t) == "passed"]
+    f2p_failed_in_after = [t for t in f2p if after_s.get(t) == "failed"]
+    f2p_missing_in_after = [t for t in f2p if after_s.get(t) == "missing"]
 
     def quick_counts(parsed, label):
         return {
@@ -434,6 +447,28 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
             "p2p_considered": rr_considered[:50],
             "p2p_rejected": rr_rejected,
             "p2p_considered_but_ok": rr_ok,
+        },
+        "f2p_analysis": {
+            "base_status": {
+                "failed": f2p_failed_in_base,
+                "missing": f2p_missing_in_base,
+                "passed": f2p_passed_in_base
+            },
+            "before_status": {
+                "passed": f2p_passed_in_before,
+                "failed": f2p_failed_in_before,
+                "missing": f2p_missing_in_before
+            },
+            "after_status": {
+                "passed": f2p_passed_in_after,
+                "failed": f2p_failed_in_after,
+                "missing": f2p_missing_in_after
+            },
+            "expected_behavior": {
+                "should_fail_in_base": len(f2p_failed_in_base),
+                "should_pass_in_before": len(f2p_passed_in_before),
+                "should_pass_in_after": len(f2p_passed_in_after)
+            }
         },
         "debug_log_counts": [
             quick_counts(base_log, "base"),

@@ -104,28 +104,45 @@ The tool validates five key rules:
 4. **C4**: P2P tests missing from base log should not pass in before log
 5. **C5**: No duplicate test entries within the same test file
 
-### Enhanced Duplicate Detection (C5)
+## F2P Analysis
 
-The tool correctly distinguishes between:
+The tool provides comprehensive analysis of Fail-to-Pass (F2P) tests, showing their status across all three log files:
 
-- **True Duplicates** (problematic): Same test appearing multiple times within the same test file - indicates framework issues, flaky tests, or re-runs
-- **Legitimate Same-Named Tests** (normal): Same test name in different test files (e.g., `dfs_visit` in both `tests/graph.rs` and `tests/quickcheck.rs`) - this is perfectly normal in Rust projects
-- **Legitimate Same-Named Tests** (normal): Different tests with same names from different modules/files
+### F2P Test Tracking
 
-**Detection Logic:**
-- Tests appearing close together (<20 lines) with similar contexts → Likely true duplicates
-- Tests appearing far apart (>20 lines) with different contexts → Legitimate separate tests
-- Common in Rust projects: `dfs_visit` in both `tests/graph.rs` and `tests/quickcheck.rs`
+For each F2P test, the tool tracks:
+- **Base Status**: Should typically be `failed` or `missing` (tests that need fixing)
+- **Before Status**: Should typically be `passed` (tests that pass in the "before" state)  
+- **After Status**: Should be `passed` (tests that pass after the fix)
 
-**Enhanced Output Example:**
+### Expected F2P Behavior
+
+1. **Ideal Case**: Test fails in base → passes in before → passes in after
+2. **Missing Test Case**: Test missing in base → missing in before → passes in after (new test added)
+3. **Problematic Cases**: 
+   - Test passes in base but is marked as F2P (should be P2P instead)
+   - Test fails in after (fix didn't work)
+
+### F2P Analysis Output
+
+The `f2p_analysis` section provides detailed breakdown:
+
 ```json
-"c5_duplicates_in_same_log_for_F2P_or_P2P": {
-  "ok": false,
-  "duplicate_examples_per_log": {
-    "base_info": [
-      "dfs_visit (appears 2 times - different contexts)",
-      "test_tarjan_scc (appears 2 times - different contexts)"
-    ]
+"f2p_analysis": {
+  "base_status": {
+    "failed": ["test_that_was_broken"],
+    "missing": ["test_that_was_added"],
+    "passed": ["test_already_working"]  // Should be empty for proper F2P
+  },
+  "before_status": {
+    "passed": ["test_that_was_fixed"],
+    "failed": [],
+    "missing": ["test_that_was_added"]
+  },
+  "after_status": {
+    "passed": ["all_f2p_tests_should_be_here"],
+    "failed": [],  // Should be empty if fixes worked
+    "missing": []
   }
 }
 ```
@@ -158,6 +175,28 @@ Results are written to JSON with detailed information:
     "p2p_considered": [...],
     "p2p_rejected": [...],
     "p2p_considered_but_ok": [...]
+  },
+  "f2p_analysis": {
+    "base_status": {
+      "failed": ["test1", "test2"],
+      "missing": ["test3"],
+      "passed": ["test4"]
+    },
+    "before_status": {
+      "passed": ["test1", "test2"],
+      "failed": [],
+      "missing": ["test3", "test4"]
+    },
+    "after_status": {
+      "passed": ["test1", "test2", "test3", "test4"],
+      "failed": [],
+      "missing": []
+    },
+    "expected_behavior": {
+      "should_fail_in_base": 2,
+      "should_pass_in_before": 2,
+      "should_pass_in_after": 4
+    }
   },
   "debug_log_counts": [
     {
