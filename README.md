@@ -59,6 +59,7 @@ python3 main.py --fail-on-reject test_data.json
 The tool accepts JSON files containing test lists in two formats:
 
 ### JSON Format (Should contain)
+#### Can use whole main json as input
 ```json
 {
   "pass_to_pass": [
@@ -104,48 +105,6 @@ The tool validates five key rules:
 4. **C4**: P2P tests missing from base log should not pass in before log
 5. **C5**: No duplicate test entries within the same test file
 
-## F2P Analysis
-
-The tool provides comprehensive analysis of Fail-to-Pass (F2P) tests, showing their status across all three log files:
-
-### F2P Test Tracking
-
-For each F2P test, the tool tracks:
-- **Base Status**: Should typically be `failed` or `missing` (tests that need fixing)
-- **Before Status**: Should typically be `passed` (tests that pass in the "before" state)  
-- **After Status**: Should be `passed` (tests that pass after the fix)
-
-### Expected F2P Behavior
-
-1. **Ideal Case**: Test fails in base → passes in before → passes in after
-2. **Missing Test Case**: Test missing in base → missing in before → passes in after (new test added)
-3. **Problematic Cases**: 
-   - Test passes in base but is marked as F2P (should be P2P instead)
-   - Test fails in after (fix didn't work)
-
-### F2P Analysis Output
-
-The `f2p_analysis` section provides detailed breakdown:
-
-```json
-"f2p_analysis": {
-  "base_status": {
-    "failed": ["test_that_was_broken"],
-    "missing": ["test_that_was_added"],
-    "passed": ["test_already_working"]  // Should be empty for proper F2P
-  },
-  "before_status": {
-    "passed": ["test_that_was_fixed"],
-    "failed": [],
-    "missing": ["test_that_was_added"]
-  },
-  "after_status": {
-    "passed": ["all_f2p_tests_should_be_here"],
-    "failed": [],  // Should be empty if fixes worked
-    "missing": []
-  }
-}
-```
 
 ## Output Format
 
