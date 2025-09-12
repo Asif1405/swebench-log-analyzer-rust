@@ -375,18 +375,18 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c4_hits = [t for t in p2p if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     c4 = len(c4_hits) > 0
 
-    # 5) True duplicates in the same log for F2P/P2P
-    # Only flag tests that appear multiple times within the same test file
+    # 5) True duplicates in the same log for F2P/P2P only
+    # Only flag tests that appear multiple times within the same test file AND are in P2P or F2P
+    p2p_f2p_set = set(p2p) | set(f2p)
     dup_map = {}
     for label, log in (("base", base_log), ("before", before_log), ("after", after_log)):
         # Detect true duplicates (same test appearing multiple times in same file)
-        true_duplicates = detect_same_file_duplicates(log.get("raw_content", ""))
-        
-        # Only report if there are actual same-file duplicates
-        if true_duplicates:
-            dup_map[label] = true_duplicates[:50]
-    
-    # Rule C5 fails only if there are true same-file duplicates
+        all_duplicates = detect_same_file_duplicates(log.get("raw_content", ""))
+        # Filter to only those in P2P or F2P
+        filtered_duplicates = [d for d in all_duplicates if any(name.split()[0] in p2p_f2p_set for name in [d.split()[0]])]
+        if filtered_duplicates:
+            dup_map[label] = filtered_duplicates[:50]
+    # Rule C5 fails only if there are true same-file duplicates in P2P/F2P
     c5 = len(dup_map) > 0
 
     # P2P Rejection logic
@@ -394,6 +394,11 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     rr_rejected   = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     rr_ok         = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) == "passed"]
     rejection_satisfied = len(rr_rejected) > 0
+
+    # F2P Rejection logic (similar to P2P)
+    f2p_rr_considered = [t for t in f2p if base_s.get(t) == "passed"]  # F2P that passed in base (problematic)
+    f2p_rr_rejected = [t for t in f2p if before_s.get(t) == "passed" and after_s.get(t) != "passed"]  # F2P that regressed
+    f2p_rr_ok = [t for t in f2p if base_s.get(t) != "passed" and before_s.get(t) == "failed" and after_s.get(t) == "passed"]  # F2P that behaved correctly
 
     # F2P Analysis
     f2p_failed_in_base = [t for t in f2p if base_s.get(t) == "failed"]
@@ -447,6 +452,10 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
             "p2p_considered": rr_considered[:50],
             "p2p_rejected": rr_rejected,
             "p2p_considered_but_ok": rr_ok,
+            "f2p_ignored_because_passed_in_base": f2p_rr_considered[:20],
+            "f2p_considered": [t for t in f2p if base_s.get(t) != "passed"][:50],
+            "f2p_rejected": f2p_rr_rejected,
+            "f2p_considered_but_ok": f2p_rr_ok,
         },
         "f2p_analysis": {
             "base_status": {
