@@ -24,16 +24,22 @@ _TEST_LINE_RE = re.compile(
 def parse_rust_tests_text(text: str) -> Dict[str, object]:
     passed, failed, ignored = set(), set(), set()
     freq = defaultdict(int)
+    test_contexts = defaultdict(list)  # Track line numbers and contexts for each test name
     lines = text.splitlines()
     
     # First pass: handle normal test lines and concatenated results
-    for line in lines:
+    for line_num, line in enumerate(lines):
         m = _TEST_LINE_RE.search(line)  # Use search instead of match to find test anywhere in line
         if not m:
             continue
         name, status = m.groups()
         status = status.lower()
         freq[name] += 1
+        test_contexts[name].append({
+            'line_num': line_num,
+            'full_line': line.strip(),
+            'status': status
+        })
         if status == "ok":
             passed.add(name)
         elif status == "failed":
@@ -241,7 +247,10 @@ def discover_log_files(log_folder: Path) -> Optional[Tuple[Path, Path, Path]]:
 def parse_log_file(path: Path) -> Dict[str, object]:
     if not path.exists():
         sys.exit(f"[error] log not found: {path}")
-    return parse_rust_tests_text(path.read_text(encoding="utf-8", errors="ignore"))
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    result = parse_rust_tests_text(text)
+    result["raw_content"] = text  # Store raw content for duplicate analysis
+    return result
 
 def load_combined_json(path: Path) -> tuple[List[str], List[str]]:
     """Load combined JSON file containing both p2p and f2p lists.
@@ -296,6 +305,52 @@ def status_lookup(names: Iterable[str], parsed: Dict[str, Set[str]]) -> Dict[str
             out[n] = "missing"
     return out
 
+def detect_same_file_duplicates(raw_content: str) -> List[str]:
+    """
+    Detect tests that appear multiple times within the same test file.
+    This is the only type of duplication that should be flagged as problematic.
+    
+    Returns list of test names that appear multiple times in the same file context.
+    """
+    if not raw_content:
+        return []
+    
+    import re
+    from collections import defaultdict
+    
+    lines = raw_content.split('\n')
+    
+    # Track which test file section we're in based on "Running" messages
+    current_file = "unknown"
+    test_occurrences = defaultdict(lambda: defaultdict(int))  # {file: {test_name: count}}
+    
+    for line in lines:
+        # Look for "Running" messages that indicate which test file is being executed
+        running_match = re.search(r'Running\s+([^/\s]+(?:/[^/\s]+)*\.rs)\s*\(', line)
+        if running_match:
+            current_file = running_match.group(1)
+            continue
+            
+        # Also look for test result summaries that might indicate file boundaries
+        if re.search(r'test result:\s*ok\.\s*\d+\s*passed', line):
+            # This marks the end of a test file section
+            continue
+            
+        # Look for test execution lines
+        test_match = re.search(r'\btest\s+([\w:]+(?:::\w+)*)\s+\.\.\.\s+(ok|FAILED|ignored)', line, re.IGNORECASE)
+        if test_match:
+            test_name = test_match.group(1).strip()
+            test_occurrences[current_file][test_name] += 1
+    
+    # Find tests that appear multiple times within the same file
+    true_duplicates = []
+    for file_name, tests in test_occurrences.items():
+        for test_name, count in tests.items():
+            if count > 1:
+                true_duplicates.append(f"{test_name} (appears {count} times in {file_name})")
+    
+    return true_duplicates
+
 def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str],
                  base_path: Path, before_path: Path, after_path: Path) -> Dict:
     universe = list(set(p2p) | set(f2p))
@@ -320,13 +375,19 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c4_hits = [t for t in p2p if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
     c4 = len(c4_hits) > 0
 
-    # 5) Duplicates in the same log for F2P/P2P
+    # 5) True duplicates in the same log for F2P/P2P
+    # Only flag tests that appear multiple times within the same test file
     dup_map = {}
     for label, log in (("base", base_log), ("before", before_log), ("after", after_log)):
-        names = [t for t in universe if log["freq"].get(t, 0) >= 2]
-        if names:
-            dup_map[label] = names[:50]
-    c5 = any(dup_map.values())
+        # Detect true duplicates (same test appearing multiple times in same file)
+        true_duplicates = detect_same_file_duplicates(log.get("raw_content", ""))
+        
+        # Only report if there are actual same-file duplicates
+        if true_duplicates:
+            dup_map[label] = true_duplicates[:50]
+    
+    # Rule C5 fails only if there are true same-file duplicates
+    c5 = len(dup_map) > 0
 
     # Rejection logic
     rr_considered = [t for t in p2p if base_s.get(t) != "passed"]

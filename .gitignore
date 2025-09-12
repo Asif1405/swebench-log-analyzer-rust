@@ -55,6 +55,7 @@ test_*.py
 logs/
 test_logs/
 *.json
+dev/
 
 # Temporary files
 *.tmp

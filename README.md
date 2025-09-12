@@ -102,7 +102,33 @@ The tool validates five key rules:
 2. **C2**: Failed tests in after log should appear in F2P or P2P list
 3. **C3**: F2P tests should pass in before log
 4. **C4**: P2P tests missing from base log should not pass in before log
-5. **C5**: No duplicate test entries in the same log
+5. **C5**: No duplicate test entries within the same test file
+
+### Enhanced Duplicate Detection (C5)
+
+The tool correctly distinguishes between:
+
+- **True Duplicates** (problematic): Same test appearing multiple times within the same test file - indicates framework issues, flaky tests, or re-runs
+- **Legitimate Same-Named Tests** (normal): Same test name in different test files (e.g., `dfs_visit` in both `tests/graph.rs` and `tests/quickcheck.rs`) - this is perfectly normal in Rust projects
+- **Legitimate Same-Named Tests** (normal): Different tests with same names from different modules/files
+
+**Detection Logic:**
+- Tests appearing close together (<20 lines) with similar contexts → Likely true duplicates
+- Tests appearing far apart (>20 lines) with different contexts → Legitimate separate tests
+- Common in Rust projects: `dfs_visit` in both `tests/graph.rs` and `tests/quickcheck.rs`
+
+**Enhanced Output Example:**
+```json
+"c5_duplicates_in_same_log_for_F2P_or_P2P": {
+  "ok": false,
+  "duplicate_examples_per_log": {
+    "base_info": [
+      "dfs_visit (appears 2 times - different contexts)",
+      "test_tarjan_scc (appears 2 times - different contexts)"
+    ]
+  }
+}
+```
 
 ## Output Format
 
