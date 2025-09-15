@@ -495,19 +495,19 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
         "counts": {"P2P": len(p2p), "F2P": len(f2p)},
         "rule_checks": {
             "c1_failed_in_base_present_in_P2P": {
-                "has_problem": c1, "examples": c1_hits[:10]
+                "problem_detected": c1, "problamatic_tests": c1_hits
             },
             "c2_failed_in_after_present_in_F2P_or_P2P": {
-                "has_problem": c2, "examples": c2_hits[:10]
+                "problem_detected": c2, "problamatic_tests": c2_hits
             },
             "c3_F2P_success_in_before": {
-                "has_problem": c3, "examples": c3_hits[:10]
+                "problem_detected": c3, "problematic_tests": c3_hits
             },
             "c4_P2P_missing_in_base_and_not_passing_in_before": {
-                "has_problem": c4, "examples": c4_hits[:10]
+                "problem_detected": c4, "problematic_tests": c4_hits
             },
             "c5_duplicates_in_same_log_for_F2P_or_P2P": {
-                "has_problem": c5, "duplicate_examples_per_log": dup_map
+                "problem_detected": c5, "duplicate_tests_per_log": dup_map
             },
         },
         "rejection_reason": {
