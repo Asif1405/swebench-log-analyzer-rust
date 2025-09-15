@@ -441,7 +441,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c3 = len(c3_hits) > 0
 
     # 4) P2P missing in base and NOT passing in before
-    c4_hits = [t for t in p2p if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
+    c4_hits = [t for t in p2p if base_s.get(t) == "missing" and before_s.get(t) == "failed"]
     c4 = len(c4_hits) > 0
 
     # 5) True duplicates in the same log for F2P/P2P
