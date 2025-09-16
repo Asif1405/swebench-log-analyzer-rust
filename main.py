@@ -39,6 +39,28 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
     test_contexts = defaultdict(list)  # Track line numbers and contexts for each test name
     lines = text.splitlines()
     
+    # Preprocess: Fix broken test lines (test names split across lines)
+    fixed_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check if this line starts with "test " and the next line continues the test name
+        if (re.match(r'test\s+', line) and 
+            i + 1 < len(lines) and 
+            not re.search(r'\.\.\.\s+(ok|FAILED|ignored)', line, re.IGNORECASE) and
+            re.search(r'\.\.\.\s+(ok|FAILED|ignored)', lines[i + 1], re.IGNORECASE)):
+            
+            # Merge this line with the next line
+            merged_line = line.rstrip() + lines[i + 1]
+            fixed_lines.append(merged_line)
+            i += 2  # Skip the next line since we merged it
+        else:
+            fixed_lines.append(line)
+            i += 1
+    
+    lines = fixed_lines
+    
     # First pass: handle normal test lines and concatenated results
     for line_num, line in enumerate(lines):
         m = _TEST_LINE_RE.search(line)  # Use search instead of match to find test anywhere in line
