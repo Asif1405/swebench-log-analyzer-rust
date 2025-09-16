@@ -440,8 +440,25 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c3_hits = [t for t in f2p if before_s.get(t) == "passed"]
     c3 = len(c3_hits) > 0
 
-    # 4) P2P missing in base and NOT passing in before
-    c4_hits = [t for t in p2p if base_s.get(t) == "missing" and before_s.get(t) == "failed"]
+    # 4) P2P tests: if they exist in base/before they must pass, and must exist+pass in after
+    c4_hits = []
+    for t in p2p:
+        base_status = base_s.get(t)
+        before_status = before_s.get(t)
+        after_status = after_s.get(t)
+        
+        # If test exists in base but doesn't pass, it's a problem
+        if base_status in ["failed", "ignored"]:
+            c4_hits.append(f"{t} (failed/ignored in base)")
+        
+        # If test exists in before but doesn't pass, it's a problem
+        if before_status in ["failed", "ignored"]:
+            c4_hits.append(f"{t} (failed/ignored in before)")
+        
+        # If test doesn't exist and pass in after, it's a problem
+        if after_status != "passed":
+            c4_hits.append(f"{t} (not passed in after: {after_status})")
+    
     c4 = len(c4_hits) > 0
 
     # 5) True duplicates in the same log for F2P/P2P
@@ -458,10 +475,34 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     # Rule C5 fails only if there are true same-file duplicates
     c5 = len(dup_map) > 0
 
-    # P2P Rejection logic - P2P tests should pass in both base and after
-    rr_considered = [t for t in p2p if not (base_s.get(t) == "passed" and after_s.get(t) == "passed")]
-    rr_rejected   = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) != "passed"]
-    rr_ok         = [t for t in rr_considered if base_s.get(t) == "missing" and before_s.get(t) == "passed"]
+    # P2P Rejection logic - updated to match new P2P rule
+    rr_rejected = []
+    rr_ok = []
+    for t in p2p:
+        base_status = base_s.get(t)
+        before_status = before_s.get(t)
+        after_status = after_s.get(t)
+        
+        # Check if this P2P test violates the rules
+        violates_rule = False
+        
+        # If exists in base but doesn't pass
+        if base_status in ["failed", "ignored"]:
+            violates_rule = True
+        
+        # If exists in before but doesn't pass
+        if before_status in ["failed", "ignored"]:
+            violates_rule = True
+        
+        # If doesn't pass in after (required)
+        if after_status != "passed":
+            violates_rule = True
+        
+        if violates_rule:
+            rr_rejected.append(t)
+        else:
+            rr_ok.append(t)
+    
     rejection_satisfied = len(rr_rejected) > 0
 
     # F2P Analysis
@@ -503,7 +544,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
             "c3_F2P_success_in_before": {
                 "problem_detected": c3, "problematic_tests": c3_hits
             },
-            "c4_P2P_missing_in_base_and_not_passing_in_before": {
+            "c4_P2P_tests_must_pass_when_present_and_pass_in_after": {
                 "problem_detected": c4, "problematic_tests": c4_hits
             },
             "c5_duplicates_in_same_log_for_F2P_or_P2P": {
@@ -513,7 +554,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
         "rejection_reason": {
             "satisfied": rejection_satisfied,
             "p2p_ignored_because_passed_in_base_and_after": [t for t in p2p if base_s.get(t) == "passed" and after_s.get(t) == "passed"][:20],
-            "p2p_considered": rr_considered[:50],
+            "p2p_considered": (rr_rejected + rr_ok)[:50],
             "p2p_rejected": rr_rejected,
             "p2p_considered_but_ok": rr_ok,
             "f2p_ignored_because_passed_in_after": [t for t in f2p if after_s.get(t) == "passed"][:20],
