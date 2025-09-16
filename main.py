@@ -21,6 +21,12 @@ _TEST_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Additional pattern for corrupted test lines (mixed with debug output)
+_CORRUPTED_TEST_LINE_RE = re.compile(
+    r'(?:line)?test\s+([\w:]+(?:::\w+)*)\s+\.\.\.\s*',
+    re.IGNORECASE,
+)
+
 # Enhanced patterns for improved duplicate detection
 _FILE_BOUNDARY_PATTERNS = [
     re.compile(r'Running\s+([^/\s]+(?:/[^/\s]+)*\.rs)\s*\('),
@@ -94,6 +100,14 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                 continue
             # If remainder doesn't contain a clear status, this test might have result later
             if not re.search(r'\b(ok|failed|ignored)\b', remainder, re.IGNORECASE):
+                pending_tests[name] = i
+        
+        # Also check for corrupted test lines (mixed with debug output)
+        corrupted_match = _CORRUPTED_TEST_LINE_RE.search(line)
+        if corrupted_match:
+            name = corrupted_match.group(1)
+            # Skip if we already found this test with a clear status
+            if name not in passed and name not in failed and name not in ignored:
                 pending_tests[name] = i
     
     # For pending tests, search more aggressively for their results
@@ -462,24 +476,33 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c3_hits = [t for t in f2p if before_s.get(t) == "passed"]
     c3 = len(c3_hits) > 0
 
-    # 4) P2P tests: if they exist in base/before they must pass, and must exist+pass in after
+    # 4) P2P tests: Updated logic based on base status
     c4_hits = []
     for t in p2p:
         base_status = base_s.get(t)
         before_status = before_s.get(t)
         after_status = after_s.get(t)
         
-        # If test exists in base but doesn't pass, it's a problem
-        if base_status in ["failed", "ignored"]:
-            c4_hits.append(f"{t} (failed/ignored in base)")
-        
-        # If test exists in before but doesn't pass, it's a problem
-        if before_status in ["failed", "ignored"]:
-            c4_hits.append(f"{t} (failed/ignored in before)")
-        
-        # If test doesn't exist and pass in after, it's a problem
+        # Always check: Must be present and passing in after
         if after_status != "passed":
             c4_hits.append(f"{t} (not passed in after: {after_status})")
+        
+        # Base status determines whether to check before status
+        if base_status == "passed":
+            # If P2P passed in base → don't check in before (no rejection for before status)
+            pass
+        elif base_status == "missing":
+            # If P2P missing in base → check in before
+            if before_status in ["failed", "missing"]:
+                # If missing or failed in before → rejection
+                c4_hits.append(f"{t} (missing in base and {before_status} in before)")
+            # If passing in before → no rejection (pass case is handled by absence from c4_hits)
+        else:
+            # base_status is "failed" or "ignored" 
+            # This means the test was present but not passing in base
+            # For failed/ignored in base, we still apply the missing-in-base logic
+            if before_status in ["failed", "missing"]:
+                c4_hits.append(f"{t} ({base_status} in base and {before_status} in before)")
     
     c4 = len(c4_hits) > 0
 
@@ -525,6 +548,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
         else:
             rr_ok.append(t)
     
+    # Fixed: satisfied should be true when there ARE rejections (issues found)
     rejection_satisfied = len(rr_rejected) > 0
 
     # F2P Analysis
