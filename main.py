@@ -17,7 +17,7 @@ from collections import defaultdict
 #   test src/... (doc-tests) ... ignored
 #   prefix text...test map::test_unicase_ascii ... ok (handles concatenated/embedded output)
 _TEST_LINE_RE = re.compile(
-    r'\btest\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)',
+    r'\btest\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored|error)',
     re.IGNORECASE,
 )
 
@@ -35,14 +35,15 @@ _FILE_BOUNDARY_PATTERNS = [
 ]
 
 _ENHANCED_TEST_PATTERNS = [
-    re.compile(r'\btest\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(ok|FAILED|ignored)', re.IGNORECASE),
-    re.compile(r'test\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s+\.\.\.\s+(ok|FAILED|ignored)', re.IGNORECASE),
+    re.compile(r'\btest\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(ok|FAILED|ignored|error)', re.IGNORECASE),
+    re.compile(r'test\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s+\.\.\.\s+(ok|FAILED|ignored|error)', re.IGNORECASE),
 ]
 
 def parse_rust_tests_text(text: str) -> Dict[str, object]:
     passed, failed, ignored = set(), set(), set()
     freq = defaultdict(int)
     test_contexts = defaultdict(list)  # Track line numbers and contexts for each test name
+    
     lines = text.splitlines()
     
     # Preprocess: Fix broken test lines (test names split across lines)
@@ -54,11 +55,20 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
         # Check if this line starts with "test " and the next line continues the test name
         if (re.match(r'test\s+', line) and 
             i + 1 < len(lines) and 
-            not re.search(r'\.\.\.\s+(ok|FAILED|ignored)', line, re.IGNORECASE) and
-            re.search(r'\.\.\.\s+(ok|FAILED|ignored)', lines[i + 1], re.IGNORECASE)):
+            not re.search(r'\.{2,}\s+(ok|FAILED|ignored|error)', line, re.IGNORECASE) and
+            re.search(r'\.{2,}\s+(ok|FAILED|ignored|error)', lines[i + 1], re.IGNORECASE)):
             
             # Merge this line with the next line
-            merged_line = line.rstrip() + lines[i + 1]
+            merged_line = line.rstrip() + " " + lines[i + 1].lstrip()
+            fixed_lines.append(merged_line)
+            i += 2  # Skip the next line since we merged it
+        # Check if this line ends with ".." or "..." and next line starts with ". status" or "... status"
+        elif (re.search(r'\.{2,}\s*$', line) and 
+              i + 1 < len(lines) and 
+              re.search(r'^\.{1,}\s+(ok|FAILED|ignored|error)', lines[i + 1], re.IGNORECASE)):
+            
+            # Merge this line with the next line
+            merged_line = line.rstrip() + " " + lines[i + 1].lstrip()
             fixed_lines.append(merged_line)
             i += 2  # Skip the next line since we merged it
         else:
@@ -82,7 +92,7 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
         })
         if status == "ok":
             passed.add(name)
-        elif status == "failed":
+        elif status == "failed" or status == "error":
             failed.add(name)
         elif status == "ignored":
             ignored.add(name)
@@ -99,7 +109,7 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
             if name in passed or name in failed or name in ignored:
                 continue
             # If remainder doesn't contain a clear status, this test might have result later
-            if not re.search(r'\b(ok|failed|ignored)\b', remainder, re.IGNORECASE):
+            if not re.search(r'\b(ok|failed|ignored|error)\b', remainder, re.IGNORECASE):
                 pending_tests[name] = i
         
         # Also check for corrupted test lines (mixed with debug output)
@@ -119,12 +129,12 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
             
             # Check for standalone status words
             stripped = line.strip()
-            if stripped in ['ok', 'FAILED', 'ignored']:
+            if stripped in ['ok', 'FAILED', 'ignored', 'error']:
                 status = stripped.lower()
                 freq[name] += 1
                 if status == "ok":
                     passed.add(name)
-                elif status == "failed":
+                elif status == "failed" or status == "error":
                     failed.add(name)
                 elif status == "ignored":
                     ignored.add(name)
@@ -132,14 +142,14 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                 break
             
             # Check for status words at the end of lines (after debug output)
-            if re.search(r'\b(ok|failed|ignored)\s*$', line, re.IGNORECASE):
-                status_match = re.search(r'\b(ok|failed|ignored)\s*$', line, re.IGNORECASE)
+            if re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE):
+                status_match = re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE)
                 if status_match:
                     status = status_match.group(1).lower()
                     freq[name] += 1
                     if status == "ok":
                         passed.add(name)
-                    elif status == "failed":
+                    elif status == "failed" or status == "error":
                         failed.add(name)
                     elif status == "ignored":
                         ignored.add(name)
@@ -200,13 +210,13 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                 break
         
         # Look for status in this accumulated text
-        status_match = re.search(r'\b(ok|failed|ignored)\b(?![^<]*>)', search_text, re.IGNORECASE)
+        status_match = re.search(r'\b(ok|failed|ignored|error)\b(?![^<]*>)', search_text, re.IGNORECASE)
         if status_match:
             status = status_match.group(1).lower()
             freq[test_name] += 1
             if status == "ok":
                 passed.add(test_name)
-            elif status == "failed":
+            elif status == "failed" or status == "error":
                 failed.add(test_name)
             elif status == "ignored":
                 ignored.add(test_name)
@@ -237,7 +247,7 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
         "failed": failed,
         "ignored": ignored,
         "all": passed | failed | ignored,
-        "freq": dict(freq),  # name -> occurrences in this log
+        "frequency": dict(freq),  # name -> occurrences in this log
     }
 
 def discover_log_files(log_folder: Path) -> Optional[Tuple[Path, Path, Path]]:
@@ -292,11 +302,62 @@ def discover_log_files(log_folder: Path) -> Optional[Tuple[Path, Path, Path]]:
     # If no consistent match, take the first of each
     return base_files[0], before_files[0], after_files[0]
 
+def strip_ansi_color_codes(text: str) -> str:
+    """Remove ANSI color codes from text."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+def parse_rust_tests_single_line(text: str) -> Dict[str, object]:
+    """Parse Rust test results from concatenated single-line format with ANSI codes."""
+    passed, failed, ignored = set(), set(), set()
+    freq = defaultdict(int)
+    
+    # Strip ANSI color codes first
+    clean_text = strip_ansi_color_codes(text)
+    
+    # Find all test patterns in the single line
+    test_pattern = re.compile(r'test\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(ok|FAILED|ignored|error)', re.IGNORECASE)
+    
+    for match in test_pattern.finditer(clean_text):
+        name, status = match.groups()
+        status = status.lower()
+        freq[name] += 1
+        
+        if status == "ok":
+            passed.add(name)
+        elif status == "failed" or status == "error":
+            failed.add(name)
+        elif status == "ignored":
+            ignored.add(name)
+    
+    return {
+        "passed": passed,
+        "failed": failed,
+        "ignored": ignored,
+        "all": passed | failed | ignored,
+        "frequency": dict(freq)
+    }
+
 def parse_log_file(path: Path) -> Dict[str, object]:
     if not path.exists():
         sys.exit(f"[error] log not found: {path}")
     text = path.read_text(encoding="utf-8", errors="ignore")
-    result = parse_rust_tests_text(text)
+    
+    # Detect format: if very few lines (like <= 3) but contains many tests, it's likely single-line format
+    lines = text.splitlines()
+    line_count = len(lines)
+    
+    # Check for ANSI color codes which indicate single-line format
+    has_ansi = bool(re.search(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', text))
+    
+    # If few lines but contains test patterns, or has ANSI codes, use single-line parser
+    test_pattern_count = len(re.findall(r'test\s+[^\s.]+(?:::[^\s.]+)*\s*\.{2,}\s*(?:ok|FAILED|ignored|error)', text, re.IGNORECASE))
+    
+    if (line_count <= 3 and test_pattern_count > 5) or has_ansi:
+        result = parse_rust_tests_single_line(text)
+    else:
+        result = parse_rust_tests_text(text)
+    
     result["raw_content"] = text  # Store raw content for duplicate analysis
     return result
 
@@ -476,33 +537,27 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c3_hits = [t for t in f2p if before_s.get(t) == "passed"]
     c3 = len(c3_hits) > 0
 
-    # 4) P2P tests: Updated logic based on base status
+    # 4) P2P tests: Fixed logic - if P2P passed in base, don't check before status
     c4_hits = []
     for t in p2p:
         base_status = base_s.get(t)
         before_status = before_s.get(t)
         after_status = after_s.get(t)
         
-        # Always check: Must be present and passing in after
+        # Check if this P2P test violates the rules
+        
+        # If exists in base but doesn't pass
+        if base_status in ["failed", "ignored"]:
+            c4_hits.append(f"{t} ({base_status} in base)")
+        
+        # If exists in before but doesn't pass AND didn't pass in base
+        # (If it passed in base, then failing in before is expected behavior)
+        if before_status in ["failed", "ignored"] and base_status != "passed":
+            c4_hits.append(f"{t} ({before_status} in before)")
+        
+        # If doesn't pass in after (required)
         if after_status != "passed":
             c4_hits.append(f"{t} (not passed in after: {after_status})")
-        
-        # Base status determines whether to check before status
-        if base_status == "passed":
-            # If P2P passed in base → don't check in before (no rejection for before status)
-            pass
-        elif base_status == "missing":
-            # If P2P missing in base → check in before
-            if before_status in ["failed", "missing"]:
-                # If missing or failed in before → rejection
-                c4_hits.append(f"{t} (missing in base and {before_status} in before)")
-            # If passing in before → no rejection (pass case is handled by absence from c4_hits)
-        else:
-            # base_status is "failed" or "ignored" 
-            # This means the test was present but not passing in base
-            # For failed/ignored in base, we still apply the missing-in-base logic
-            if before_status in ["failed", "missing"]:
-                c4_hits.append(f"{t} ({base_status} in base and {before_status} in before)")
     
     c4 = len(c4_hits) > 0
 
@@ -535,8 +590,9 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
         if base_status in ["failed", "ignored"]:
             violates_rule = True
         
-        # If exists in before but doesn't pass
-        if before_status in ["failed", "ignored"]:
+        # If exists in before but doesn't pass AND didn't pass in base
+        # (If it passed in base, then failing in before is expected behavior)
+        if before_status in ["failed", "ignored"] and base_status != "passed":
             violates_rule = True
         
         # If doesn't pass in after (required)
