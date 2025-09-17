@@ -123,8 +123,14 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
     # For pending tests, search more aggressively for their results
     for name, start_line in pending_tests.items():
         found_result = False
-        # Look in subsequent lines for the result, potentially many lines later
-        for j in range(start_line + 1, min(start_line + 200, len(lines))):
+        
+        # Adaptive search strategy: start with a reasonable limit and expand if needed
+        # Look for patterns that suggest extensive logging output
+        initial_search_limit = 200
+        extended_search_limit = 10000  # Much larger limit for tests with extensive output
+        
+        # First pass: try the normal search range
+        for j in range(start_line + 1, min(start_line + initial_search_limit, len(lines))):
             line = lines[j]
             
             # Check for standalone status words
@@ -146,6 +152,16 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                 status_match = re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE)
                 if status_match:
                     status = status_match.group(1).lower()
+                    
+                    # Additional check: make sure this isn't part of an error message
+                    # by looking at the context including the current line
+                    context_lines = lines[max(0, j-3):j+1]  # Include current line
+                    context_text = ' '.join(context_lines).lower()
+                    
+                    # Skip if this status appears to be part of assertion failure or panic message
+                    if ('assertion' in context_text or 'panicked at' in context_text):
+                        continue
+                    
                     freq[name] += 1
                     if status == "ok":
                         passed.add(name)
@@ -156,9 +172,70 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                     found_result = True
                     break
             
-            # Stop looking if we hit another test line (but allow some leeway)
+            # Stop looking if we hit another test line (normal threshold)
             if re.search(r'\btest\s+[\w:]+\s+\.\.\.\s*', line) and j > start_line + 5:
                 break
+        
+        # If not found in normal range, check if this might be a test with extensive logging
+        if not found_result:
+            # Look for indicators of extensive logging in the initial range
+            sample_range = lines[start_line + 1:min(start_line + initial_search_limit, len(lines))]
+            logging_indicators = 0
+            
+            for sample_line in sample_range:
+                # Count lines that suggest verbose debug/trace output
+                if any(indicator in sample_line.lower() for indicator in [
+                    'logging at trace:', 'logging at debug:', 'logging at info:',
+                    'message {', 'payload:', 'extensions:', 'cipher_suites:',
+                    'handshake', 'tls', 'ssl', 'certificate', 'encryption'
+                ]):
+                    logging_indicators += 1
+            
+            # If we found many logging indicators, extend the search
+            if logging_indicators > 10:  # Threshold for "extensive logging"
+                for j in range(start_line + initial_search_limit, min(start_line + extended_search_limit, len(lines))):
+                    line = lines[j]
+                    
+                    # Check for standalone status words
+                    stripped = line.strip()
+                    if stripped in ['ok', 'FAILED', 'ignored', 'error']:
+                        status = stripped.lower()
+                        freq[name] += 1
+                        if status == "ok":
+                            passed.add(name)
+                        elif status == "failed" or status == "error":
+                            failed.add(name)
+                        elif status == "ignored":
+                            ignored.add(name)
+                        found_result = True
+                        break
+                    
+                    # Check for status words at the end of lines
+                    if re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE):
+                        status_match = re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE)
+                        if status_match:
+                            status = status_match.group(1).lower()
+                            
+                            # Skip if it's part of an error message
+                            context_lines = lines[max(0, j-3):j+1]
+                            context_text = ' '.join(context_lines).lower()
+                            
+                            if ('assertion' in context_text or 'panicked at' in context_text):
+                                continue
+                            
+                            freq[name] += 1
+                            if status == "ok":
+                                passed.add(name)
+                            elif status == "failed" or status == "error":
+                                failed.add(name)
+                            elif status == "ignored":
+                                ignored.add(name)
+                            found_result = True
+                            break
+                    
+                    # Stop if we hit another test (with more generous threshold for verbose tests)
+                    if re.search(r'\btest\s+[\w:]+\s+\.\.\.\s*', line) and j > start_line + 50:
+                        break
     
     # Third pass: handle split status words like "o\nk" 
     for i, line in enumerate(lines):
@@ -315,10 +392,10 @@ def parse_rust_tests_single_line(text: str) -> Dict[str, object]:
     # Strip ANSI color codes first
     clean_text = strip_ansi_color_codes(text)
     
-    # Find all test patterns in the single line
-    test_pattern = re.compile(r'test\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(ok|FAILED|ignored|error)', re.IGNORECASE)
+    # First, try simple pattern for tests with immediate results
+    simple_pattern = re.compile(r'test\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(ok|FAILED|ignored|error)', re.IGNORECASE)
     
-    for match in test_pattern.finditer(clean_text):
+    for match in simple_pattern.finditer(clean_text):
         name, status = match.groups()
         status = status.lower()
         freq[name] += 1
@@ -329,6 +406,95 @@ def parse_rust_tests_single_line(text: str) -> Dict[str, object]:
             failed.add(name)
         elif status == "ignored":
             ignored.add(name)
+    
+    # Handle complex cases where test result is separated by debug output
+    # Look for test lines that start but don't have immediate results
+    test_start_pattern = re.compile(r'test\s+([^\s.]+(?:::[^\s.]+)*)\s*\.{2,}\s*(?![a-zA-Z])', re.IGNORECASE)
+    
+    for match in test_start_pattern.finditer(clean_text):
+        name = match.group(1)
+        
+        # Skip if we already found this test with a result
+        if name in passed or name in failed or name in ignored:
+            continue
+            
+        # Look for the result after this test name, but before the next test
+        search_pos = match.end()
+        
+        # Find the next test to limit our search scope more precisely
+        next_test_pattern = re.compile(r'test\s+[^\s.]+(?:::[^\s.]+)*\s*\.{2,}', re.IGNORECASE)
+        next_test_match = next_test_pattern.search(clean_text, search_pos)
+        
+        if next_test_match:
+            # Be more conservative about the search boundary
+            # Look for any status word just before the next test
+            potential_end = next_test_match.start()
+            
+            # Check if there's a status word right before the next test
+            pre_test_text = clean_text[max(0, potential_end-10):potential_end]
+            immediate_status = re.search(r'\b(ok|FAILED|ignored|error)\s*$', pre_test_text, re.IGNORECASE)
+            
+            if immediate_status:
+                # This status likely belongs to our current test
+                status = immediate_status.group(1).lower()
+                freq[name] += 1
+                
+                if status == "ok":
+                    passed.add(name)
+                elif status == "failed" or status == "error":
+                    failed.add(name)
+                elif status == "ignored":
+                    ignored.add(name)
+                continue
+            
+            search_end = potential_end
+        else:
+            search_end = search_pos + 1000
+            
+        search_text = clean_text[search_pos:search_end]
+        
+        # Look for status words, but prioritize those that appear isolated
+        status_pattern = re.compile(r'\b(ok|FAILED|ignored|error)\b', re.IGNORECASE)
+        status_matches = list(status_pattern.finditer(search_text))
+        
+        if status_matches:
+            # Strategy: Find the last valid status before any new test appears
+            # This handles cases where debug output contains status words that aren't the final result
+            best_status = None
+            best_pos = -1
+            
+            for status_match in status_matches:
+                status = status_match.group(1).lower()
+                pos = status_match.start()
+                
+                # Get context around this status
+                context_before = search_text[max(0, pos-50):pos]
+                context_after = search_text[pos:min(len(search_text), pos+50)]
+                
+                # Skip if it's clearly part of an error message or assertion
+                if ('assertion' in context_before.lower() or 
+                    'panicked at' in context_before.lower() or
+                    'expected' in context_before.lower()):
+                    continue
+                
+                # Skip if it's immediately followed by "test" (likely next test)
+                if re.search(r'\s+test\s+', context_after):
+                    continue
+                
+                # This looks like a legitimate test result - take the last one found
+                if pos > best_pos:
+                    best_status = status
+                    best_pos = pos
+            
+            if best_status:
+                freq[name] += 1
+                
+                if best_status == "ok":
+                    passed.add(name)
+                elif best_status == "failed" or best_status == "error":
+                    failed.add(name)
+                elif best_status == "ignored":
+                    ignored.add(name)
     
     return {
         "passed": passed,
