@@ -703,29 +703,39 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     c3_hits = [t for t in f2p if before_s.get(t) == "passed"]
     c3 = len(c3_hits) > 0
 
-    # 4) P2P tests: Fixed logic - if P2P passed in base, don't check before status
+    # 4) C4 Rule: At least one P2P test that is missing in base AND 
+    #    (failing in before OR missing from both base and before) AND must be present and pass in after
     c4_hits = []
+    c4_valid_tests = []  # Tests that meet the C4 criteria
+    
     for t in p2p:
         base_status = base_s.get(t)
         before_status = before_s.get(t)
         after_status = after_s.get(t)
         
-        # Check if this P2P test violates the rules
-        
-        # If exists in base but doesn't pass
-        if base_status in ["failed", "ignored"]:
-            c4_hits.append(f"{t} ({base_status} in base)")
-        
-        # If exists in before but doesn't pass AND didn't pass in base
-        # (If it passed in base, then failing in before is expected behavior)
-        if before_status in ["failed", "ignored"] and base_status != "passed":
-            c4_hits.append(f"{t} ({before_status} in before)")
-        
-        # If doesn't pass in after (required)
-        if after_status != "passed":
-            c4_hits.append(f"{t} (not passed in after: {after_status})")
+        # Check if this P2P test meets C4 criteria
+        # 1. Must be missing in base
+        if base_status == "missing":
+            # 2. Must either be failing in before OR missing from both base and before
+            before_condition_met = (before_status == "failed" or before_status == "missing")
+            
+            # 3. Must be present and pass in after
+            after_condition_met = (after_status == "passed")
+            
+            if before_condition_met and after_condition_met:
+                c4_valid_tests.append(t)
+                # This is a valid C4 test - no violation
+            elif before_condition_met and not after_condition_met:
+                # Meets first two conditions but fails in after - this is a violation
+                c4_hits.append(f"{t} (missing in base, {before_status} in before, but {after_status} in after)")
+            elif not before_condition_met:
+                # Missing in base but passed in before - this violates the C4 pattern
+                c4_hits.append(f"{t} (missing in base but {before_status} in before - violates C4 pattern)")
     
-    c4 = len(c4_hits) > 0
+    # C4 rule satisfied if we have at least one valid test AND no violations
+    c4_satisfied = len(c4_valid_tests) > 0
+    c4_has_violations = len(c4_hits) > 0
+    c4 = c4_has_violations  # Problem detected if there are violations
 
     # 5) True duplicates in the same log for F2P/P2P
     # Only flag tests that appear multiple times within the same test file
@@ -741,7 +751,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
     # Rule C5 fails only if there are true same-file duplicates
     c5 = len(dup_map) > 0
 
-    # P2P Rejection logic - updated to match new P2P rule
+    # P2P Rejection logic - updated to match new C4 rule
     rr_rejected = []
     rr_ok = []
     for t in p2p:
@@ -749,21 +759,30 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
         before_status = before_s.get(t)
         after_status = after_s.get(t)
         
-        # Check if this P2P test violates the rules
+        # Check if this P2P test violates the new C4 rules
         violates_rule = False
         
-        # If exists in base but doesn't pass
-        if base_status in ["failed", "ignored"]:
-            violates_rule = True
-        
-        # If exists in before but doesn't pass AND didn't pass in base
-        # (If it passed in base, then failing in before is expected behavior)
-        if before_status in ["failed", "ignored"] and base_status != "passed":
-            violates_rule = True
-        
-        # If doesn't pass in after (required)
-        if after_status != "passed":
-            violates_rule = True
+        # Apply new C4 logic: test must be missing in base
+        if base_status == "missing":
+            # Must either be failing in before OR missing from both base and before
+            before_condition_met = (before_status == "failed" or before_status == "missing")
+            
+            # Must be present and pass in after
+            after_condition_met = (after_status == "passed")
+            
+            if before_condition_met and after_condition_met:
+                # This is a valid C4 test pattern - no violation
+                pass
+            elif before_condition_met and not after_condition_met:
+                # Meets pattern but fails in after - violation
+                violates_rule = True
+            elif not before_condition_met:
+                # Missing in base but passed in before - violates C4 pattern
+                violates_rule = True
+        else:
+            # Not missing in base - this doesn't fit the C4 pattern
+            # For now, we'll consider this as not violating (could be adjusted based on requirements)
+            pass
         
         if violates_rule:
             rr_rejected.append(t)
@@ -813,7 +832,11 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
                 "problem_detected": c3, "problematic_tests": c3_hits
             },
             "c4_P2P_tests_must_pass_when_present_and_pass_in_after": {
-                "problem_detected": c4, "problematic_tests": c4_hits
+                "problem_detected": c4, 
+                "problematic_tests": c4_hits,
+                "valid_c4_tests": c4_valid_tests,
+                "c4_satisfied": c4_satisfied,
+                "description": "At least one P2P test missing in base AND (failing in before OR missing from both) AND present and passing in after"
             },
             "c5_duplicates_in_same_log_for_F2P_or_P2P": {
                 "problem_detected": c5, "duplicate_tests_per_log": dup_map
