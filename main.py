@@ -17,7 +17,7 @@ from collections import defaultdict
 #   test src/... (doc-tests) ... ignored
 #   prefix text...test map::test_unicase_ascii ... ok (handles concatenated/embedded output)
 _TEST_LINE_RE = re.compile(
-    r'\btest\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored|error)',
+    r'\btest\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored|error(?!\s*:))',
     re.IGNORECASE,
 )
 
@@ -162,6 +162,24 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                     if ('assertion' in context_text or 'panicked at' in context_text):
                         continue
                     
+                    # Skip if this is an "error:" that's part of test output (not the final status)
+                    # Check if this looks like a diagnostic error message rather than a test result
+                    if status == 'error':
+                        # If the line contains "error:" followed by a descriptive message, it's likely
+                        # part of the test output, not the final test result
+                        if re.search(r'error:\s+[a-zA-Z]', line, re.IGNORECASE):
+                            continue
+                        # If this is just the word "error" at the end without a colon, treat it carefully
+                        elif line.strip().lower() == 'error':
+                            # This might be a legitimate test failure result
+                            pass
+                        # If it's something like "... error" without additional context, it might be legitimate  
+                        elif re.search(r'\.\.\.\s*error\s*$', line, re.IGNORECASE):
+                            pass
+                        else:
+                            # For other error patterns, be more careful - only accept if it really looks like a test result
+                            continue
+                    
                     freq[name] += 1
                     if status == "ok":
                         passed.add(name)
@@ -222,6 +240,23 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                             
                             if ('assertion' in context_text or 'panicked at' in context_text):
                                 continue
+                            
+                            # Skip if this is an "error:" that's part of test output (not the final status)
+                            if status == 'error':
+                                # If the line contains "error:" followed by a descriptive message, it's likely
+                                # part of the test output, not the final test result
+                                if re.search(r'error:\s+[a-zA-Z]', line, re.IGNORECASE):
+                                    continue
+                                # If this is just the word "error" at the end without a colon, treat it carefully
+                                elif line.strip().lower() == 'error':
+                                    # This might be a legitimate test failure result
+                                    pass
+                                # If it's something like "... error" without additional context, it might be legitimate  
+                                elif re.search(r'\.\.\.\s*error\s*$', line, re.IGNORECASE):
+                                    pass
+                                else:
+                                    # For other error patterns, be more careful - only accept if it really looks like a test result
+                                    continue
                             
                             freq[name] += 1
                             if status == "ok":
