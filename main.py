@@ -162,6 +162,16 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                     if ('assertion' in context_text or 'panicked at' in context_text):
                         continue
                     
+                    # Skip if there's a panic message between the test start and this status
+                    # that mentions a different test name
+                    search_range = lines[start_line:j+1]
+                    search_text = ' '.join(search_range).lower()
+                    if ('panicked at' in search_text and 
+                        'thread' in search_text and
+                        name.lower() not in search_text):
+                        # This status likely belongs to the panicked test, not our test
+                        continue
+                    
                     # Skip if this is an "error:" that's part of test output (not the final status)
                     # Check if this looks like a diagnostic error message rather than a test result
                     if status == 'error':
@@ -239,6 +249,16 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                             context_text = ' '.join(context_lines).lower()
                             
                             if ('assertion' in context_text or 'panicked at' in context_text):
+                                continue
+                            
+                            # Skip if there's a panic message between the test start and this status
+                            # that mentions a different test name
+                            search_range = lines[start_line:j+1]
+                            search_text = ' '.join(search_range).lower()
+                            if ('panicked at' in search_text and 
+                                'thread' in search_text and
+                                name.lower() not in search_text):
+                                # This status likely belongs to the panicked test, not our test
                                 continue
                             
                             # Skip if this is an "error:" that's part of test output (not the final status)
