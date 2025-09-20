@@ -834,9 +834,6 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
             "c4_P2P_tests_must_pass_when_present_and_pass_in_after": {
                 "problem_detected": c4, 
                 "problematic_tests": c4_hits,
-                "valid_c4_tests": c4_valid_tests,
-                "c4_satisfied": c4_satisfied,
-                "description": "At least one P2P test missing in base AND (failing in before OR missing from both) AND present and passing in after"
             },
             "c5_duplicates_in_same_log_for_F2P_or_P2P": {
                 "problem_detected": c5, "duplicate_tests_per_log": dup_map
