@@ -840,7 +840,7 @@ def verify_rules(base_log, before_log, after_log, p2p: List[str], f2p: List[str]
             },
         },
         "rejection_reason": {
-            "satisfied": rejection_satisfied,
+            "is_rejected": rejection_satisfied,
             "p2p_ignored_because_passed_in_base_and_after": [t for t in p2p if base_s.get(t) == "passed" and after_s.get(t) == "passed"][:20],
             "p2p_considered": (rr_rejected + rr_ok)[:50],
             "p2p_rejected": rr_rejected,
