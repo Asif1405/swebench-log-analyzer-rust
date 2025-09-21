@@ -147,65 +147,78 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                 found_result = True
                 break
             
-            # Check for status words at the end of lines (after debug output)
+            # Check for status words at the end of lines (after debug output) OR at the beginning mixed with logging
+            status_match = None
             if re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE):
                 status_match = re.search(r'\b(ok|failed|ignored|error)\s*$', line, re.IGNORECASE)
-                if status_match:
-                    status = status_match.group(1).lower()
-                    
-                    # Additional check: make sure this isn't part of an error message
-                    # by looking at the context including the current line
-                    context_lines = lines[max(0, j-3):j+1]  # Include current line
-                    context_text = ' '.join(context_lines).lower()
-                    
-                    # Skip if this status appears to be part of assertion failure or panic message
-                    if ('assertion' in context_text or 'panicked at' in context_text):
+            elif re.search(r'^(ok|FAILED|ignored|error)', line, re.IGNORECASE):
+                status_match = re.search(r'^(ok|FAILED|ignored|error)', line, re.IGNORECASE)
+
+            if status_match:
+                status = status_match.group(1).lower()
+                
+                # Additional check: make sure this isn't part of an error message
+                # by looking at the context including the current line
+                context_lines = lines[max(0, j-3):j+1]  # Include current line
+                context_text = ' '.join(context_lines).lower()
+                
+                # Skip if this status appears to be part of assertion failure or panic message
+                if ('assertion' in context_text or 'panicked at' in context_text):
+                    continue
+                
+                # Skip if there's a panic message between the test start and this status
+                # that mentions a different test name, OR if this status appears mixed with logging output
+                search_range = lines[start_line:j+1]
+                search_text = ' '.join(search_range).lower()
+                if ('panicked at' in search_text and 
+                    'thread' in search_text and
+                    name.lower() not in search_text):
+                    # This status likely belongs to the panicked test, not our test
+                    continue
+                
+                # Skip if the status appears mixed with logging output on the same line
+                # BUT allow it if there's evidence of a panic for this test
+                if (status.lower() in ['failed', 'error'] and 
+                    ('logging at' in line.lower() or 
+                     re.search(r'(debug|trace|info|warn|error):', line.lower()))):
+                    # Check if there's a panic message for this specific test in a broader range
+                    # Look both before and after the test start
+                    expanded_range = lines[max(0, start_line-100):j+1]
+                    panic_for_this_test = any(
+                        f"thread '{name}'" in search_line.lower() and 'panicked at' in search_line.lower()
+                        for search_line in expanded_range
+                    )
+                    if not panic_for_this_test:
+                        # This status is mixed with logging output and no panic evidence, skip it
                         continue
-                    
-                    # Skip if there's a panic message between the test start and this status
-                    # that mentions a different test name, OR if this status appears mixed with logging output
-                    search_range = lines[start_line:j+1]
-                    search_text = ' '.join(search_range).lower()
-                    if ('panicked at' in search_text and 
-                        'thread' in search_text and
-                        name.lower() not in search_text):
-                        # This status likely belongs to the panicked test, not our test
+                
+                # Skip if this is an "error:" that's part of test output (not the final status)
+                # Check if this looks like a diagnostic error message rather than a test result
+                if status == 'error':
+                    # If the line contains "error:" followed by a descriptive message, it's likely
+                    # part of the test output, not the final test result
+                    if re.search(r'error:\s+[a-zA-Z]', line, re.IGNORECASE):
                         continue
-                    
-                    # Skip if the status appears mixed with logging output on the same line
-                    if (status.lower() in ['failed', 'error'] and 
-                        ('logging at' in line.lower() or 
-                         re.search(r'(debug|trace|info|warn|error):', line.lower()))):
-                        # This status is mixed with logging output, likely not the final test result
+                    # If this is just the word "error" at the end without a colon, treat it carefully
+                    elif line.strip().lower() == 'error':
+                        # This might be a legitimate test failure result
+                        pass
+                    # If it's something like "... error" without additional context, it might be legitimate  
+                    elif re.search(r'\.\.\.\s*error\s*$', line, re.IGNORECASE):
+                        pass
+                    else:
+                        # For other error patterns, be more careful - only accept if it really looks like a test result
                         continue
-                    
-                    # Skip if this is an "error:" that's part of test output (not the final status)
-                    # Check if this looks like a diagnostic error message rather than a test result
-                    if status == 'error':
-                        # If the line contains "error:" followed by a descriptive message, it's likely
-                        # part of the test output, not the final test result
-                        if re.search(r'error:\s+[a-zA-Z]', line, re.IGNORECASE):
-                            continue
-                        # If this is just the word "error" at the end without a colon, treat it carefully
-                        elif line.strip().lower() == 'error':
-                            # This might be a legitimate test failure result
-                            pass
-                        # If it's something like "... error" without additional context, it might be legitimate  
-                        elif re.search(r'\.\.\.\s*error\s*$', line, re.IGNORECASE):
-                            pass
-                        else:
-                            # For other error patterns, be more careful - only accept if it really looks like a test result
-                            continue
-                    
-                    freq[name] += 1
-                    if status == "ok":
-                        passed.add(name)
-                    elif status == "failed" or status == "error":
-                        failed.add(name)
-                    elif status == "ignored":
-                        ignored.add(name)
-                    found_result = True
-                    break
+                
+                freq[name] += 1
+                if status == "ok":
+                    passed.add(name)
+                elif status == "failed" or status == "error":
+                    failed.add(name)
+                elif status == "ignored":
+                    ignored.add(name)
+                found_result = True
+                break
             
             # Stop looking if we hit another test line (normal threshold)
             if re.search(r'\btest\s+[\w:]+\s+\.\.\.\s*', line) and j > start_line + 5:
