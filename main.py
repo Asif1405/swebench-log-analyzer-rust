@@ -39,12 +39,75 @@ _ENHANCED_TEST_PATTERNS = [
     re.compile(r'test\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s+\.\.\.\s+(ok|FAILED|ignored|error)', re.IGNORECASE),
 ]
 
+# Nextest format patterns
+_NEXTEST_PASS_RE = re.compile(r'^\s*PASS\s+\[[^\]]+\]\s+(.+)$', re.IGNORECASE)
+_NEXTEST_FAIL_RE = re.compile(r'^\s*FAIL\s+\[[^\]]+\]\s+(.+)$', re.IGNORECASE)
+_NEXTEST_SKIP_RE = re.compile(r'^\s*(SKIP|IGNORED)\s+\[[^\]]+\]\s+(.+)$', re.IGNORECASE)
+
+def parse_nextest_format(lines, passed, failed, ignored, freq, test_contexts):
+    """Parse nextest format logs."""
+    for i, line in enumerate(lines):
+        # Parse PASS lines
+        match = _NEXTEST_PASS_RE.match(line)
+        if match:
+            test_name = match.group(1).strip()
+            passed.add(test_name)
+            freq[test_name] += 1
+            test_contexts[test_name].append({
+                'line_num': i,
+                'full_line': line.strip(),
+                'status': 'passed'
+            })
+            continue
+        
+        # Parse FAIL lines (usually in summary section)
+        match = _NEXTEST_FAIL_RE.match(line)
+        if match:
+            test_name = match.group(1).strip()
+            failed.add(test_name)
+            freq[test_name] += 1
+            test_contexts[test_name].append({
+                'line_num': i,
+                'full_line': line.strip(),
+                'status': 'failed'
+            })
+            continue
+        
+        # Parse SKIP/IGNORED lines
+        match = _NEXTEST_SKIP_RE.match(line)
+        if match:
+            test_name = match.group(2).strip()
+            ignored.add(test_name)
+            freq[test_name] += 1
+            test_contexts[test_name].append({
+                'line_num': i,
+                'full_line': line.strip(),
+                'status': 'ignored'
+            })
+            continue
+    
+    return {
+        "passed": passed,
+        "failed": failed,
+        "ignored": ignored,
+        "all": passed | failed | ignored,
+        "frequency": dict(freq),  # name -> occurrences in this log
+    }
+
 def parse_rust_tests_text(text: str) -> Dict[str, object]:
     passed, failed, ignored = set(), set(), set()
     freq = defaultdict(int)
     test_contexts = defaultdict(list)  # Track line numbers and contexts for each test name
     
     lines = text.splitlines()
+    
+    # Detect if this is nextest format
+    is_nextest = any('nextest run' in line.lower() or 'Nextest run ID' in line for line in lines[:20])
+    
+    if is_nextest:
+        return parse_nextest_format(lines, passed, failed, ignored, freq, test_contexts)
+    
+    # Continue with original parsing for standard Rust test format
     
     # Preprocess: Fix broken test lines (test names split across lines)
     fixed_lines = []
