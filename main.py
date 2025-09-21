@@ -163,13 +163,20 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                         continue
                     
                     # Skip if there's a panic message between the test start and this status
-                    # that mentions a different test name
+                    # that mentions a different test name, OR if this status appears mixed with logging output
                     search_range = lines[start_line:j+1]
                     search_text = ' '.join(search_range).lower()
                     if ('panicked at' in search_text and 
                         'thread' in search_text and
                         name.lower() not in search_text):
                         # This status likely belongs to the panicked test, not our test
+                        continue
+                    
+                    # Skip if the status appears mixed with logging output on the same line
+                    if (status.lower() in ['failed', 'error'] and 
+                        ('logging at' in line.lower() or 
+                         re.search(r'(debug|trace|info|warn|error):', line.lower()))):
+                        # This status is mixed with logging output, likely not the final test result
                         continue
                     
                     # Skip if this is an "error:" that's part of test output (not the final status)
@@ -252,13 +259,20 @@ def parse_rust_tests_text(text: str) -> Dict[str, object]:
                                 continue
                             
                             # Skip if there's a panic message between the test start and this status
-                            # that mentions a different test name
+                            # that mentions a different test name, OR if this status appears mixed with logging output
                             search_range = lines[start_line:j+1]
                             search_text = ' '.join(search_range).lower()
                             if ('panicked at' in search_text and 
                                 'thread' in search_text and
                                 name.lower() not in search_text):
                                 # This status likely belongs to the panicked test, not our test
+                                continue
+                            
+                            # Skip if the status appears mixed with logging output on the same line
+                            if (status.lower() in ['failed', 'error'] and 
+                                ('logging at' in line.lower() or 
+                                 re.search(r'(debug|trace|info|warn|error):', line.lower()))):
+                                # This status is mixed with logging output, likely not the final test result
                                 continue
                             
                             # Skip if this is an "error:" that's part of test output (not the final status)
